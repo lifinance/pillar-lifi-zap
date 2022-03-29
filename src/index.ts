@@ -1,11 +1,16 @@
 import Lifi, { ChainId, Execution, ExecutionSettings, RoutesRequest } from '@lifinance/sdk'
 import { BigNumberish, ethers } from 'ethers'
+import { NetworkNames, Sdk } from 'etherspot';
 import 'dotenv/config'
 import axios from 'axios'
 
-const STAKE_KLIMA_CONTRACT_ADDRESS = '0x4D70a031Fc76DA6a9bC0C922101A05FA95c3A227'
-const KLIMA_ADDRESS = '0x4e78011Ce80ee02d2c3e649Fb657E45898257815'
-const sKLIMA_ADDRESS = '0xb0C22d8D350C67420f06F48936654f567C73E8C8'
+import {
+  erc20Abi,
+  stakeKlimaAbi,
+  STAKE_KLIMA_CONTRACT_ADDRESS,
+  KLIMA_ADDRESS,
+  sKLIMA_ADDRESS,
+} from './constants';
 
 const setupWallet = (chainId: number, providerUri: string) => {
   // setup wallet
@@ -37,64 +42,17 @@ const getGasPrice = async (chainId: number) => {
 }
 
 const getSetAllowanceTransaction = async (tokenAddress: string, approvalAddress: string, amount: BigNumberish) => {
-  const ERC20_ABI = [
-    {
-      "name": "approve",
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "spender",
-          "type": "address"
-        },
-        {
-          "internalType": "uint256",
-          "name": "amount",
-          "type": "uint256"
-        }
-      ],
-      "outputs": [
-        {
-          "internalType": "bool",
-          "name": "",
-          "type": "bool"
-        }
-      ],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "name": "allowance",
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "owner",
-          "type": "address"
-        },
-        {
-          "internalType": "address",
-          "name": "spender",
-          "type": "address"
-        }
-      ],
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    }
-  ]
-
-  const erc20 = new ethers.Contract(tokenAddress, ERC20_ABI)
+  const erc20 = new ethers.Contract(tokenAddress, erc20Abi)
   return erc20.populateTransaction.approve(approvalAddress, amount)
 }
 
+const getTransferTransaction = async (tokenAddress: string, toAddress: string, amount: BigNumberish) => {
+  const erc20 = new ethers.Contract(tokenAddress, erc20Abi)
+  return erc20.populateTransaction.transfer(toAddress, amount)
+}
+
 const getStakeKlimaTransaction = (amount: BigNumberish) => {
-  const stakeKlimaABI = [{ "inputs": [{ "internalType": "address", "name": "_staking", "type": "address" }, { "internalType": "address", "name": "_KLIMA", "type": "address" }], "stateMutability": "nonpayable", "type": "constructor" }, { "inputs": [], "name": "KLIMA", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" }, { "inputs": [{ "internalType": "uint256", "name": "_amount", "type": "uint256" }], "name": "stake", "outputs": [], "stateMutability": "nonpayable", "type": "function" }, { "inputs": [], "name": "staking", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" }]
-  const contract = new ethers.Contract(STAKE_KLIMA_CONTRACT_ADDRESS, stakeKlimaABI)
+  const contract = new ethers.Contract(STAKE_KLIMA_CONTRACT_ADDRESS, stakeKlimaAbi)
   return contract.populateTransaction.stake(amount)
 }
 
@@ -109,11 +67,19 @@ const run = async () => {
   const tokenPolygonSKLIMA = await Lifi.getToken(polygon.id, sKLIMA_ADDRESS)!
 
   // Setup Wallet
-  const wallet = setupWallet(fantom.id, fantom.metamask.rpcUrls[0])
+  const fantomWallet = setupWallet(fantom.id, fantom.metamask.rpcUrls[0])
+  const polygonWallet = setupWallet(polygon.id, polygon.metamask.rpcUrls[0])
 
   // Init Etherspot SDK
-  // > TODO: get future smart contract wallet address on destination chain (Polygon)
-  const smartWalletPolygonAddress = await wallet.getAddress()
+  const fantomSdk = new Sdk(fantomWallet, {
+    networkName: NetworkNames.Fantom,
+  });
+
+  const polygonSdk = new Sdk(polygonWallet, {
+    networkName: NetworkNames.Matic,
+  });
+
+  await polygonSdk.computeContractAccount();
 
   // Bridge Transfer
   // > get LI.FI quote for transfer
@@ -122,11 +88,11 @@ const run = async () => {
   const routeRequest: RoutesRequest = {
     fromChainId: fantom.id,
     fromTokenAddress: tokenFantomUSDC.address,
-    fromAddress: await wallet.getAddress(),
+    fromAddress: await fantomWallet.getAddress(),
     fromAmount: ethers.utils.parseUnits('1', tokenFantomUSDC.decimals).toString(),
     toChainId: polygon.id,
     toTokenAddress: tokenPolygonUSDC.address,
-    toAddress: smartWalletPolygonAddress,
+    toAddress: polygonSdk.state.accountAddress,
 
     options: {
       bridges: {
@@ -152,13 +118,13 @@ const run = async () => {
   }
 
   console.log('Execute quote:', route)
-  const executed = await Lifi.executeRoute(wallet, route, settings)
+  const executed = await Lifi.executeRoute(fantomWallet, route, settings)
 
   // > wait for transmission
   console.log('Transfer executed:', executed)
 
   // read how many funds have been transferred
-  const tokenAmountUsdc = (await Lifi.getTokenBalance(smartWalletPolygonAddress, tokenPolygonUSDC))!
+  const tokenAmountUsdc = (await Lifi.getTokenBalance(polygonSdk.state.accountAddress, tokenPolygonUSDC))!
   const amountUsdc = ethers.utils.parseUnits(tokenAmountUsdc.amount, tokenAmountUsdc.decimals)
   const amountUsdcToMatic = ethers.utils.parseUnits('0.2', tokenPolygonUSDC.decimals).toString()
   const amountUsdcToKlima = amountUsdc.sub(amountUsdcToMatic).toString()
@@ -173,7 +139,7 @@ const run = async () => {
   const quoteUsdcToMatic = await Lifi.getQuote(
     polygon.id,
     tokenPolygonUSDC.address,
-    smartWalletPolygonAddress,
+    polygonSdk.state.accountAddress,
     amountUsdcToMatic,
     polygon.id,
     tokenPolygonMATIC.address
@@ -185,7 +151,7 @@ const run = async () => {
   const quoteUsdcToKlima = await Lifi.getQuote(
     polygon.id,
     tokenPolygonUSDC.address,
-    smartWalletPolygonAddress,
+    polygonSdk.state.accountAddress,
     amountUsdcToKlima,
     polygon.id,
     tokenPolygonMATIC.address
@@ -196,43 +162,42 @@ const run = async () => {
   // TODO: (relayer uses the swapped gas to pay for transaction, pay back pre-fund)
 
   // read how many Klima tokens are in the smart contract wallet
-  const tokenAmountKlima = (await Lifi.getTokenBalance(smartWalletPolygonAddress, tokenPolygonKLIMA))!
+  const tokenAmountKlima = (await Lifi.getTokenBalance(polygonSdk.state.accountAddress, tokenPolygonKLIMA))!
   const amountKlima = ethers.utils.parseUnits(tokenAmountKlima.amount, tokenAmountKlima.decimals)
   console.log(`Wallet contains ${amountKlima.toString()} KLIMA.`)
-  const walletPolygon = setupWallet(polygon.id, polygon.metamask.rpcUrls[0])
-
-  // DEBUG:
-  const gasPrice = await getGasPrice(ChainId.POL)
-  console.log(`Current gas price is ${gasPrice.toString()}`)
 
   // Transaction 2:
-  // > TODO: approve KLIMA tokens
   // approve KLIMA: e.g. https://polygonscan.com/tx/0xb1aca780869956f7a79d9915ff58fd47acbaf9b34f0eb13f9b18d1772f1abef2
   console.log('Approve KLIMA')
   const txAllow = await getSetAllowanceTransaction(tokenPolygonKLIMA.address, STAKE_KLIMA_CONTRACT_ADDRESS, amountKlima)
+  await polygonSdk.batchExecuteAccountTransaction({
+    to: txAllow.to,
+    data: txAllow.data,
+  })
 
-  // DEBUG:
-  txAllow.gasPrice = gasPrice
-  const txAllowResponse = await walletPolygon.sendTransaction(txAllow)
-  console.log(txAllowResponse)
-  const txAllowReceipt = await txAllowResponse.wait()
-  console.log(txAllowReceipt)
-
-  // > TODO: stake Klima tokens (sender received sKLIMA tokens 1:1)
   // stake KLIMA: e.g. https://polygonscan.com/tx/0x5c392aa3487a1fa9e617c5697fe050d9d85930a44508ce74c90caf1bd36264bf
   console.log('Stake KLIMA')
   const txStake = await getStakeKlimaTransaction(amountKlima)
+  
+  await polygonSdk.batchExecuteAccountTransaction({
+    to: txStake.to,
+    data: txStake.data,
+  })
 
-  // DEBUG:
-  txStake.gasPrice = gasPrice
-  const txStakeResponse = await walletPolygon.sendTransaction(txStake)
-  console.log(txStakeResponse)
-  const txStakeReceipt = await txStakeResponse.wait()
-  console.log(txStakeReceipt)
-
-  // > TODO: send sKLIMA token to Key Based Wallet
   console.log('Send sKLIMA')
-  const tokenAmountSKlima = (await Lifi.getTokenBalance(smartWalletPolygonAddress, tokenPolygonSKLIMA))!
+  const txTransfer = await getTransferTransaction(KLIMA_ADDRESS, polygonWallet.address, amountKlima);
+  await polygonSdk.batchExecuteAccountTransaction({
+    to: txTransfer.to,
+    data: txTransfer.data,
+  });
+
+  const gatewayBatch = await polygonSdk.estimateGatewayBatch();
+
+  console.log(gatewayBatch);
+
+  await polygonSdk.submitGatewayBatch();
+
+  const tokenAmountSKlima = (await Lifi.getTokenBalance(polygonSdk.state.accountAddress, tokenPolygonSKLIMA))!
   const amountSKlima = ethers.utils.parseUnits(tokenAmountSKlima.amount, tokenAmountSKlima.decimals)
   console.log(`Wallet contains ${amountSKlima.toString()} sKLIMA.`)
 }

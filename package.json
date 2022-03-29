@@ -13,7 +13,9 @@
     "typescript": "^4.6.3"
   },
   "dependencies": {
+    "@etherspot/contracts": "^1.4.0",
     "@lifinance/sdk": "^0.5.1",
-    "dotenv": "^16.0.0"
+    "dotenv": "^16.0.0",
+    "etherspot": "^1.28.1"
   }
 }
