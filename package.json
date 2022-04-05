@@ -16,6 +16,8 @@
     "@etherspot/contracts": "^1.4.0",
     "@lifinance/sdk": "^0.5.1",
     "dotenv": "^16.0.0",
-    "etherspot": "^1.28.1"
+    "etherspot": "^1.28.1",
+    "reflect-metadata": "^0.1.13",
+    "rxjs": "^7.5.5"
   }
 }
