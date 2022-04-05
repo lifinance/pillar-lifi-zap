@@ -161,26 +161,42 @@ const run = async () => {
   // Add Approve and Swap transactions to Gateway batch
   if (quoteUsdcToMatic.transactionRequest && quoteUsdcToKlima.transactionRequest) {
     // Approve
-    const txAllowMatic = await getSetAllowanceTransaction(
-      tokenPolygonUSDC.address,
-      quoteUsdcToMatic.transactionRequest.to as string,
-      quoteUsdcToMatic.estimate.toAmount,
-    );
-    await polygonSdk.batchGatewayTransactionRequest({
-      to: txAllowMatic.to as string,
-      data: txAllowMatic.data as string,
-    });
+    // if same route add a single approval tx
+    if (quoteUsdcToMatic.estimate.approvalAddress === quoteUsdcToKlima.estimate.approvalAddress) {
+      const totalAmount = BigNumber.from(quoteUsdcToMatic.estimate.toAmount).add(quoteUsdcToKlima.estimate.toAmount)
+      const txAllowTotal = await getSetAllowanceTransaction(
+        tokenPolygonUSDC.address,
+        quoteUsdcToMatic.estimate.approvalAddress as string,
+        totalAmount,
+      );
 
-    const txAllowKlima = await getSetAllowanceTransaction(
-      tokenPolygonUSDC.address,
-      quoteUsdcToMatic.transactionRequest.to as string,
-      quoteUsdcToMatic.estimate.toAmount,
-    );
+      await polygonSdk.batchGatewayTransactionRequest({
+        to: txAllowTotal.to as string,
+        data: txAllowTotal.data as string,
+      });
 
-    await polygonSdk.batchGatewayTransactionRequest({
-      to: txAllowKlima.to as string,
-      data: txAllowKlima.data as string,
-    });
+    } else {
+      const txAllowMatic = await getSetAllowanceTransaction(
+        tokenPolygonUSDC.address,
+        quoteUsdcToMatic.estimate.approvalAddress as string,
+        quoteUsdcToMatic.estimate.toAmount,
+      );
+      await polygonSdk.batchGatewayTransactionRequest({
+        to: txAllowMatic.to as string,
+        data: txAllowMatic.data as string,
+      });
+  
+      const txAllowKlima = await getSetAllowanceTransaction(
+        tokenPolygonUSDC.address,
+        quoteUsdcToKlima.estimate.approvalAddress as string,
+        quoteUsdcToKlima.estimate.toAmount,
+      );
+  
+      await polygonSdk.batchGatewayTransactionRequest({
+        to: txAllowKlima.to as string,
+        data: txAllowKlima.data as string,
+      });
+    };
 
     // Swap
     await polygonSdk.batchGatewayTransactionRequest({
