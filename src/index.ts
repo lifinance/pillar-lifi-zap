@@ -1,6 +1,6 @@
 import Lifi, { ChainId, Execution, ExecutionSettings, RoutesRequest } from '@lifinance/sdk'
-import { BigNumberish, ethers, constants, BigNumber } from 'ethers'
-import { AccountStates, EnvNames, NetworkNames, Sdk } from 'etherspot';
+import { BigNumberish, ethers, BigNumber } from 'ethers'
+import { GatewayBatch, NetworkNames, Sdk } from 'etherspot';
 import 'dotenv/config'
 import axios from 'axios'
 
@@ -123,118 +123,127 @@ const run = async () => {
   console.log('Transfer executed:', executed)
 
   // read how many funds have been transferred
+  let enoughMATIC = false;
+  let gatewayBatch: GatewayBatch;
   const tokenAmountUsdc = (await Lifi.getTokenBalance(polygonSdk.state.accountAddress, tokenPolygonUSDC))!
   const amountUsdc = ethers.utils.parseUnits(tokenAmountUsdc.amount, tokenAmountUsdc.decimals)
-  const amountUsdcToMatic = ethers.utils.parseUnits('0.2', tokenPolygonUSDC.decimals).toString()
-  const amountUsdcToKlima = amountUsdc.sub(amountUsdcToMatic).toString()
+  let amountUsdcToMatic = ethers.utils.parseUnits('0.01', tokenPolygonUSDC.decimals).toString()
+  let amountUsdcToKlima = amountUsdc.sub(amountUsdcToMatic).toString()
   console.log(`Wallet contains ${amountUsdc.toString()} USDC.`)
-
-  // Perform Actions on destination chain
-  // Batch 1:
-  const quoteUsdcToMatic = await Lifi.getQuote(
-    polygon.id,
-    tokenPolygonUSDC.address,
-    polygonSdk.state.accountAddress,
-    amountUsdcToMatic,
-    polygon.id,
-    tokenPolygonMATIC.address,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    ['sushiswap-pol'],
-  )
-  console.log(quoteUsdcToMatic)
-  console.log(`Swap quote ${quoteUsdcToMatic.estimate.fromAmount} USDC to ${quoteUsdcToMatic.estimate.toAmount} MATIC.`)
-
-  const quoteUsdcToKlima = await Lifi.getQuote(
-    polygon.id,
-    tokenPolygonUSDC.address,
-    polygonSdk.state.accountAddress,
-    amountUsdcToKlima,
-    polygon.id,
-    tokenPolygonKLIMA.address,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    ['sushiswap-pol'],
-  )
-  console.log(quoteUsdcToKlima)
-  console.log(`Swap quote ${quoteUsdcToKlima.estimate.fromAmount} USDC to ${quoteUsdcToKlima.estimate.toAmount} KLIMA.`)
-
-  // Add Approve and Swap transactions to Gateway batch
-  if (
-      quoteUsdcToMatic.transactionRequest &&
-      quoteUsdcToKlima.transactionRequest &&
-      quoteUsdcToMatic.estimate.approvalAddress === quoteUsdcToKlima.estimate.approvalAddress
-    ) {
-    // Approve
-    const totalAmount = BigNumber.from(quoteUsdcToMatic.estimate.fromAmount).add(quoteUsdcToKlima.estimate.fromAmount)
-    const txAllowTotal = await getSetAllowanceTransaction(
-      tokenPolygonUSDC.address,
-      quoteUsdcToMatic.estimate.approvalAddress as string,
-      totalAmount,
-    );
-
-    await polygonSdk.batchExecuteAccountTransaction({
-      to: txAllowTotal.to as string,
-      data: txAllowTotal.data as string,
-    });
-
-    // Swap
-    await polygonSdk.batchExecuteAccountTransaction({
-      to: quoteUsdcToMatic.transactionRequest.to as string,
-      data: quoteUsdcToMatic.transactionRequest.data as string,
-    });
-
-    await polygonSdk.batchExecuteAccountTransaction({
-      to: quoteUsdcToKlima.transactionRequest.to as string,
-      data: quoteUsdcToKlima.transactionRequest.data as string,
-    });
-  } else  {
-    return;
-  }
   
-  const amountKlima = quoteUsdcToKlima.estimate.toAmount;
+  while (!enoughMATIC) {
+    // Perform Actions on destination chain
+    // Batch 1:
+    const quoteUsdcToMatic = await Lifi.getQuote(
+      polygon.id,
+      tokenPolygonUSDC.address,
+      polygonSdk.state.accountAddress,
+      amountUsdcToMatic,
+      polygon.id,
+      tokenPolygonMATIC.address,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      ['sushiswap-pol'],
+    )
+    // console.log(quoteUsdcToMatic)
+    console.log(`Swap quote ${quoteUsdcToMatic.estimate.fromAmount} USDC to ${quoteUsdcToMatic.estimate.toAmount} MATIC.`)
 
-  // approve KLIMA: e.g. https://polygonscan.com/tx/0xb1aca780869956f7a79d9915ff58fd47acbaf9b34f0eb13f9b18d1772f1abef2
-  console.log('Approve KLIMA')
-  const txAllow = await getSetAllowanceTransaction(tokenPolygonKLIMA.address, STAKE_KLIMA_CONTRACT_ADDRESS, amountKlima)
-  await polygonSdk.batchExecuteAccountTransaction({
-    to: txAllow.to as string,
-    data: txAllow.data as string,
-  });
+    const quoteUsdcToKlima = await Lifi.getQuote(
+      polygon.id,
+      tokenPolygonUSDC.address,
+      polygonSdk.state.accountAddress,
+      amountUsdcToKlima,
+      polygon.id,
+      tokenPolygonKLIMA.address,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      ['sushiswap-pol'],
+    )
+    // console.log(quoteUsdcToKlima)
+    console.log(`Swap quote ${quoteUsdcToKlima.estimate.fromAmount} USDC to ${quoteUsdcToKlima.estimate.toAmount} KLIMA.`)
 
-  // stake KLIMA: e.g. https://polygonscan.com/tx/0x5c392aa3487a1fa9e617c5697fe050d9d85930a44508ce74c90caf1bd36264bf
-  console.log('Stake KLIMA')
-  const txStake = await getStakeKlimaTransaction(amountKlima)
-  await polygonSdk.batchExecuteAccountTransaction({
-    to: txStake.to as string,
-    data: txStake.data as string,
-  })
+    // Add Approve and Swap transactions to Gateway batch
+    if (
+        quoteUsdcToMatic.transactionRequest &&
+        quoteUsdcToKlima.transactionRequest &&
+        quoteUsdcToMatic.estimate.approvalAddress === quoteUsdcToKlima.estimate.approvalAddress
+      ) {
+      // Approve
+      const totalAmount = BigNumber.from(quoteUsdcToMatic.estimate.fromAmount).add(quoteUsdcToKlima.estimate.fromAmount)
+      const txAllowTotal = await getSetAllowanceTransaction(
+        tokenPolygonUSDC.address,
+        quoteUsdcToMatic.estimate.approvalAddress as string,
+        totalAmount,
+      );
 
-  console.log('Send sKLIMA')
-  const txTransfer = await getTransferTransaction(tokenPolygonSKLIMA.address, polygonWallet.address, amountKlima);
-  await polygonSdk.batchExecuteAccountTransaction({
-    to: txTransfer.to as string,
-    data: txTransfer.data as string,
-  });
-  const gatewayBatch = await polygonSdk.estimateGatewayBatch();
+      await polygonSdk.batchExecuteAccountTransaction({
+        to: txAllowTotal.to as string,
+        data: txAllowTotal.data as string,
+      });
 
-  console.log(gatewayBatch);
+      // Swap
+      await polygonSdk.batchExecuteAccountTransaction({
+        to: quoteUsdcToMatic.transactionRequest.to as string,
+        data: quoteUsdcToMatic.transactionRequest.data as string,
+      });
 
-  await polygonSdk.submitGatewayBatch();
+      await polygonSdk.batchExecuteAccountTransaction({
+        to: quoteUsdcToKlima.transactionRequest.to as string,
+        data: quoteUsdcToKlima.transactionRequest.data as string,
+      });
+    } else  {
+      return;
+    }
+    
+    const amountKlima = quoteUsdcToKlima.estimate.toAmount;
 
-  const tokenAmountSKlima = (await Lifi.getTokenBalance(polygonWallet.address, tokenPolygonSKLIMA))!
-  const amountSKlima = ethers.utils.parseUnits(tokenAmountSKlima.amount, tokenAmountSKlima.decimals)
-  console.log(`Wallet contains ${amountSKlima.toString()} sKLIMA.`)
+    // approve KLIMA: e.g. https://polygonscan.com/tx/0xb1aca780869956f7a79d9915ff58fd47acbaf9b34f0eb13f9b18d1772f1abef2
+    // console.log('Approve KLIMA')
+    const txAllow = await getSetAllowanceTransaction(tokenPolygonKLIMA.address, STAKE_KLIMA_CONTRACT_ADDRESS, amountKlima)
+    await polygonSdk.batchExecuteAccountTransaction({
+      to: txAllow.to as string,
+      data: txAllow.data as string,
+    });
+
+    // stake KLIMA: e.g. https://polygonscan.com/tx/0x5c392aa3487a1fa9e617c5697fe050d9d85930a44508ce74c90caf1bd36264bf
+    // console.log('Stake KLIMA')
+    const txStake = await getStakeKlimaTransaction(amountKlima)
+    await polygonSdk.batchExecuteAccountTransaction({
+      to: txStake.to as string,
+      data: txStake.data as string,
+    })
+
+    // console.log('Send sKLIMA')
+    const txTransfer = await getTransferTransaction(tokenPolygonSKLIMA.address, polygonWallet.address, amountKlima);
+    await polygonSdk.batchExecuteAccountTransaction({
+      to: txTransfer.to as string,
+      data: txTransfer.data as string,
+    });
+
+    gatewayBatch = await polygonSdk.estimateGatewayBatch();
+
+    enoughMATIC = BigNumber.from(quoteUsdcToMatic.estimate.toAmount).gt(gatewayBatch.estimation.feeAmount);
+    
+    if (enoughMATIC) {
+      await polygonSdk.submitGatewayBatch();
+    }
+    // Recalculate
+    const exchaneRate = BigNumber.from(quoteUsdcToMatic.estimate.toAmount).div(quoteUsdcToMatic.estimate.fromAmount); // MATIC / USDC
+    amountUsdcToMatic = BigNumber.from(gatewayBatch.estimation.feeAmount).div(exchaneRate).toString();
+    amountUsdcToKlima = amountUsdc.sub(amountUsdcToMatic).toString();
+    polygonSdk.clearGatewayBatch();
+    await new Promise(resolve => setTimeout(resolve, 2e3));
+  }
 }
 
 run()
