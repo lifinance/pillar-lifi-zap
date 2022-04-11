@@ -78,10 +78,6 @@ const run = async () => {
 
   await polygonSdk.computeContractAccount();
 
-  if ((await polygonSdk.getAccount()).state === AccountStates.UnDeployed) {
-    await polygonSdk.batchDeployAccount();
-  }
-
   console.log('Smart wallet address' , polygonSdk.state.accountAddress);
 
   // Bridge Transfer - Sends 1 USDC to Polygon
@@ -141,7 +137,15 @@ const run = async () => {
     polygonSdk.state.accountAddress,
     amountUsdcToMatic,
     polygon.id,
-    tokenPolygonMATIC.address
+    tokenPolygonMATIC.address,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    ['sushiswap-pol'],
   )
   console.log(quoteUsdcToMatic)
   console.log(`Swap quote ${quoteUsdcToMatic.estimate.fromAmount} USDC to ${quoteUsdcToMatic.estimate.toAmount} MATIC.`)
@@ -153,69 +157,57 @@ const run = async () => {
     amountUsdcToKlima,
     polygon.id,
     tokenPolygonKLIMA.address,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    ['sushiswap-pol'],
   )
   console.log(quoteUsdcToKlima)
   console.log(`Swap quote ${quoteUsdcToKlima.estimate.fromAmount} USDC to ${quoteUsdcToKlima.estimate.toAmount} KLIMA.`)
 
   // Add Approve and Swap transactions to Gateway batch
-  if (quoteUsdcToMatic.transactionRequest && quoteUsdcToKlima.transactionRequest) {
+  if (
+      quoteUsdcToMatic.transactionRequest &&
+      quoteUsdcToKlima.transactionRequest &&
+      quoteUsdcToMatic.estimate.approvalAddress === quoteUsdcToKlima.estimate.approvalAddress
+    ) {
     // Approve
-    // if same route add a single approval tx
-    if (quoteUsdcToMatic.estimate.approvalAddress === quoteUsdcToKlima.estimate.approvalAddress) {
-      const totalAmount = BigNumber.from(quoteUsdcToMatic.estimate.fromAmount).add(quoteUsdcToKlima.estimate.fromAmount)
-      const txAllowTotal = await getSetAllowanceTransaction(
-        tokenPolygonUSDC.address,
-        quoteUsdcToMatic.estimate.approvalAddress as string,
-        totalAmount,
-      );
+    const totalAmount = BigNumber.from(quoteUsdcToMatic.estimate.fromAmount).add(quoteUsdcToKlima.estimate.fromAmount)
+    const txAllowTotal = await getSetAllowanceTransaction(
+      tokenPolygonUSDC.address,
+      quoteUsdcToMatic.estimate.approvalAddress as string,
+      totalAmount,
+    );
 
-      await polygonSdk.batchGatewayTransactionRequest({
-        to: txAllowTotal.to as string,
-        data: txAllowTotal.data as string,
-      });
-
-    } else {
-      const txAllowMatic = await getSetAllowanceTransaction(
-        tokenPolygonUSDC.address,
-        quoteUsdcToMatic.estimate.approvalAddress as string,
-        quoteUsdcToMatic.estimate.fromAmount,
-      );
-      await polygonSdk.batchGatewayTransactionRequest({
-        to: txAllowMatic.to as string,
-        data: txAllowMatic.data as string,
-      });
-  
-      const txAllowKlima = await getSetAllowanceTransaction(
-        tokenPolygonUSDC.address,
-        quoteUsdcToMatic.estimate.approvalAddress as string,
-        quoteUsdcToKlima.estimate.fromAmount,
-      );
-  
-      await polygonSdk.batchGatewayTransactionRequest({
-        to: txAllowKlima.to as string,
-        data: txAllowKlima.data as string,
-      });
-    };
+    await polygonSdk.batchExecuteAccountTransaction({
+      to: txAllowTotal.to as string,
+      data: txAllowTotal.data as string,
+    });
 
     // Swap
-    await polygonSdk.batchGatewayTransactionRequest({
+    await polygonSdk.batchExecuteAccountTransaction({
       to: quoteUsdcToMatic.transactionRequest.to as string,
       data: quoteUsdcToMatic.transactionRequest.data as string,
     });
 
-    await polygonSdk.batchGatewayTransactionRequest({
+    await polygonSdk.batchExecuteAccountTransaction({
       to: quoteUsdcToKlima.transactionRequest.to as string,
       data: quoteUsdcToKlima.transactionRequest.data as string,
     });
+  } else  {
+    return;
   }
   
   const amountKlima = quoteUsdcToKlima.estimate.toAmount;
-  // console.log(`Wallet contains ${amountKlima.toString()} KLIMA.`)
 
   // approve KLIMA: e.g. https://polygonscan.com/tx/0xb1aca780869956f7a79d9915ff58fd47acbaf9b34f0eb13f9b18d1772f1abef2
   console.log('Approve KLIMA')
   const txAllow = await getSetAllowanceTransaction(tokenPolygonKLIMA.address, STAKE_KLIMA_CONTRACT_ADDRESS, amountKlima)
-  await polygonSdk.batchGatewayTransactionRequest({
+  await polygonSdk.batchExecuteAccountTransaction({
     to: txAllow.to as string,
     data: txAllow.data as string,
   });
@@ -223,7 +215,7 @@ const run = async () => {
   // stake KLIMA: e.g. https://polygonscan.com/tx/0x5c392aa3487a1fa9e617c5697fe050d9d85930a44508ce74c90caf1bd36264bf
   console.log('Stake KLIMA')
   const txStake = await getStakeKlimaTransaction(amountKlima)
-  await polygonSdk.batchGatewayTransactionRequest({
+  await polygonSdk.batchExecuteAccountTransaction({
     to: txStake.to as string,
     data: txStake.data as string,
   })
