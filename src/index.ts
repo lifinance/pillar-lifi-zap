@@ -1,4 +1,4 @@
-import Lifi, { Chain, ChainId, Execution, ExecutionSettings, RoutesRequest, Token } from '@lifinance/sdk'
+import Lifi, { Chain, ChainId, ExchangeTool, Execution, ExecutionSettings, RoutesRequest, Token } from '@lifinance/sdk'
 import { BigNumberish, ethers, BigNumber, Signer } from 'ethers'
 import { NetworkNames, Sdk } from 'etherspot';
 import 'dotenv/config'
@@ -122,7 +122,9 @@ const run = async () => {
     networkName: NetworkNames.Matic,
   });
 
-  await polygonSdk.computeContractAccount();
+  await polygonSdk.computeContractAccount({
+    sync: false,
+  });
 
   console.log('Smart wallet address', polygonSdk.state.accountAddress);
 
@@ -135,11 +137,14 @@ const run = async () => {
   const tokenAmountUsdc = (await Lifi.getTokenBalance(polygonSdk.state.accountAddress, tokenPolygonUSDC))!
   const amountUsdc = ethers.utils.parseUnits(tokenAmountUsdc.amount, tokenAmountUsdc.decimals)
   const amountUsdcToMatic = ethers.utils.parseUnits('0.2', tokenPolygonUSDC.decimals).toString()
-  const amountUsdcToKlima = amountUsdc.sub(amountUsdcToMatic).toString()
+  const maxAmountUsdc = ethers.utils.parseUnits('1', tokenPolygonUSDC.decimals) // just for testing
+  const diffAmountUsdc = amountUsdc.sub(amountUsdcToMatic)
+  const amountUsdcToKlima = maxAmountUsdc.lt(diffAmountUsdc) ? maxAmountUsdc : diffAmountUsdc
   console.log(`Wallet contains ${amountUsdc.toString()} USDC.`)
 
   // Perform Actions on destination chain
   // Batch 1:
+  const allowedDex = ExchangeTool.paraswap
   const quoteUsdcToMatic = await Lifi.getQuote(
     polygon.id,
     tokenPolygonUSDC.address,
@@ -154,7 +159,7 @@ const run = async () => {
     undefined,
     undefined,
     undefined,
-    ['sushiswap-pol'],
+    [allowedDex],
   )
   console.log(quoteUsdcToMatic)
   console.log(`Swap quote ${quoteUsdcToMatic.estimate.fromAmount} USDC to ${quoteUsdcToMatic.estimate.toAmountMin} MATIC.`)
@@ -163,7 +168,7 @@ const run = async () => {
     polygon.id,
     tokenPolygonUSDC.address,
     polygonSdk.state.accountAddress,
-    amountUsdcToKlima,
+    amountUsdcToKlima.toString(),
     polygon.id,
     tokenPolygonKLIMA.address,
     undefined,
@@ -173,7 +178,7 @@ const run = async () => {
     undefined,
     undefined,
     undefined,
-    ['sushiswap-pol'],
+    [allowedDex],
   )
   console.log(quoteUsdcToKlima)
   console.log(`Swap quote ${quoteUsdcToKlima.estimate.fromAmount} USDC to ${quoteUsdcToKlima.estimate.toAmountMin} KLIMA.`)
@@ -236,6 +241,7 @@ const run = async () => {
     to: txTransfer.to as string,
     data: txTransfer.data as string,
   });
+
   const gatewayBatch = await polygonSdk.estimateGatewayBatch();
 
   const enoughMATIC = BigNumber.from(quoteUsdcToMatic.estimate.toAmountMin).gte(gatewayBatch.estimation.feeAmount);
@@ -244,8 +250,26 @@ const run = async () => {
   }
   console.log(gatewayBatch);
 
-  const batch = await polygonSdk.submitGatewayBatch();
-  console.log(batch);
+  let batch = await polygonSdk.submitGatewayBatch();
+  console.log('gateway submitted batch', batch);
+
+  console.log('Waiting for batch execution')
+  // info: batch.state seams to wait for a lot of confirmations (6 minutes) before changing to 'Sent'
+  let isDone = !!(batch.transaction && batch.transaction.hash)
+  while (!isDone) {
+    console.log('check batch execution')
+    batch = await polygonSdk.getGatewaySubmittedBatch({
+      hash: batch.hash,
+    })
+
+    isDone = !!(batch.transaction && batch.transaction.hash)
+    if (!isDone) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1000)
+      })
+    }
+  }
+  console.log('gateway executed batch', batch.transaction.hash, batch);
 
   const tokenAmountSKlima = (await Lifi.getTokenBalance(polygonWalletAddress, tokenPolygonSKLIMA))!
   const amountSKlima = ethers.utils.parseUnits(tokenAmountSKlima.amount, tokenAmountSKlima.decimals)
